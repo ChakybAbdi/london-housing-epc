@@ -1,0 +1,416 @@
+---
+title: "Data_prep"
+output: html_document
+date: "2026-03-04"
+---
+```{r}
+library(readr)
+library(dplyr)
+library(stringr)
+```
+
+```{r}
+files <- list.files(
+  path = "data_gov",
+  pattern = "*.csv",
+  full.names = TRUE
+)
+```
+
+```{r}
+ppd_cols <- c(
+  "transaction_id",
+  "price",
+  "date_of_transfer",
+  "postcode",
+  "property_type",
+  "old_new",
+  "duration",
+  "paon",
+  "saon",
+  "street",
+  "locality",
+  "town_city",
+  "district",
+  "county",
+  "ppd_category_type",
+  "record_status"
+)
+```
+
+```{r}
+read_ppd_year <- function(path) {
+  read_csv(
+    file = path,
+    col_names = ppd_cols,
+    col_types = cols(
+      transaction_id     = col_character(),
+      price              = col_double(),
+      date_of_transfer   = col_datetime(format = ""),
+      postcode           = col_character(),
+      property_type      = col_character(),
+      old_new            = col_character(),
+      duration           = col_character(),
+      paon               = col_character(),
+      saon               = col_character(),
+      street             = col_character(),
+      locality           = col_character(),
+      town_city          = col_character(),
+      district           = col_character(),
+      county             = col_character(),
+      ppd_category_type  = col_character(),
+      record_status      = col_character()
+    ),
+    progress = TRUE,
+    show_col_types = FALSE
+  )
+}
+```
+
+```{r}
+lst <- lapply(files, read_ppd_year)
+ppd_all <- bind_rows(lst)
+```
+```{r}
+# Keep only valid residential transactions and remove records with invalid price or missing date
+ppd_all <- ppd_all %>% 
+  filter(ppd_category_type == "A", record_status == "A") %>% 
+  filter(!is.na(price), price > 0, !is.na(date_of_transfer))
+```
+
+```{r}
+# Restrict dataset to London properties only to focus analysis on a single housing market
+ppd_london <- ppd_all %>%
+  filter(county == "GREATER LONDON")
+```
+
+
+```{r}
+write_csv(ppd_london, "london_dataset.csv")
+```
+
+
+```{r}
+ppd_london<-read.csv("london_dataset.csv")
+```
+
+```{r}
+names(ppd_london)
+```
+```{r}
+ppd_london %>%
+  mutate(year = lubridate::year(date_of_transfer)) %>%
+  count(year) %>%
+  arrange(year)
+```
+```{r}
+# PPD: what does SAON actually look like?
+ppd_london %>%
+  select(saon, paon, street) %>%
+  sample_n(20)
+```
+
+```{r}
+ppd_london %>%
+  mutate(is_flat = !is.na(saon)) %>%
+  count(is_flat)
+```
+
+```{r}
+ppd_london %>%
+  filter(!is.na(saon)) %>%
+  select(saon, paon) %>%
+  sample_n(20)
+```
+```{r}
+ppd_london <- ppd_london %>%
+  mutate(
+    saon_clean = str_extract(saon, "\\d+"),        # pull first number
+    paon_clean = str_extract(paon, "^[^,]+"),       # take everything before comma
+    paon_clean = trimws(toupper(paon_clean)),
+    postcode   = trimws(toupper(postcode))
+  )
+```
+
+```{r}
+ppd_london %>%
+  filter(!is.na(saon)) %>%
+  mutate(saon_clean = str_extract(saon, "(?<=FLAT |APARTMENT |UNIT )([\\dA-Z]+)") )%>%
+  select(saon, saon_clean) %>%
+  sample_n(20)
+```
+
+```{r}
+# How many PPD flats have letter-only or alphanumeric flat IDs?
+ppd_london %>%
+  filter(!is.na(saon)) %>%
+  mutate(
+    has_number = str_detect(saon, "\\d"),
+    has_letter_flat = str_detect(saon, "FLAT\\s+[A-Z](?!\\d)")
+  ) %>%
+  summarise(
+    total_flats     = n(),
+    numeric_flats   = sum(has_number),
+    letter_flats    = sum(has_letter_flat)
+  )
+```
+```{r}
+# PPD: extract flat identifier (number, letter, or alphanumeric like 2C)
+ppd_london %>%
+  filter(!is.na(saon)) %>%
+  mutate(
+    saon_clean = str_extract(
+      toupper(saon), 
+      "(?<=FLAT |APARTMENT |UNIT )([\\dA-Z]+)"
+    )
+  ) %>%
+  select(saon, saon_clean) %>%
+  sample_n(20)
+```
+
+```{r}
+# 1. Null check on key join fields
+ppd_london %>%
+  summarise(
+    total          = n(),
+    postcode_null  = sum(is.na(postcode) | postcode == ""),
+    paon_null      = sum(is.na(paon)),
+    saon_null      = sum(is.na(saon)),  # expected to be high - houses
+    price_null     = sum(is.na(price) | price <= 0),
+    date_null      = sum(is.na(date_of_transfer))
+  )
+```
+
+```{r}
+# 3. Check for duplicate transactions
+ppd_london %>%
+  count(transaction_id) %>%
+  filter(n > 1) %>%
+  nrow()
+```
+```{r}
+names(ppd_london)
+```
+
+```{r}
+ppd_clean <- ppd_london %>%
+  mutate(
+    postcode   = trimws(toupper(postcode)),
+    paon_clean = trimws(toupper(str_extract(paon, "^[^,]+"))),
+    saon_clean = str_extract(toupper(saon), "(?<=FLAT |APARTMENT |UNIT )([\\dA-Z]+)")
+  ) %>%
+  select(
+    transaction_id, price, date_of_transfer,
+    postcode, paon, saon, paon_clean, saon_clean,
+    street, town_city, district,
+    property_type, old_new, duration
+  )
+```
+
+```{r}
+write.csv(ppd_clean,"clean_ppd.csv")
+```
+
+```{r}
+# ── 1. SPLIT INTO FLATS AND HOUSES ────────────────────────────────────────────
+ppd_flats  <- ppd_clean %>% filter(!is.na(saon))
+ppd_houses <- ppd_clean %>% filter(is.na(saon))
+
+epc_flats  <- epc_clean %>% filter(!is.na(saon_clean))
+epc_houses <- epc_clean %>% filter(is.na(saon_clean))
+
+# ── 2. JOIN FLATS ─────────────────────────────────────────────────────────────
+flats_joined <- ppd_flats %>%
+  left_join(epc_flats, by = c("postcode", "saon_clean", "paon_clean"))
+
+# ── 3. JOIN HOUSES ────────────────────────────────────────────────────────────
+houses_joined <- ppd_houses %>%
+  left_join(epc_houses, by = c("postcode", "paon_clean"))
+
+# ── 4. COMBINE ────────────────────────────────────────────────────────────────
+merged <- bind_rows(flats_joined, houses_joined)
+
+# ── 5. CHECK MATCH RATE ───────────────────────────────────────────────────────
+merged %>%
+  summarise(
+    total      = n(),
+    matched    = sum(!is.na(lmk_key)),
+    unmatched  = sum(is.na(lmk_key)),
+    match_rate = round(matched / total * 100, 1)
+  )
+```
+
+```{r}
+# 1. How many PPD records have a valid paon_clean?
+ppd_clean %>%
+  summarise(
+    has_paon_clean = sum(!is.na(paon_clean) & paon_clean != ""),
+    no_paon_clean  = sum(is.na(paon_clean) | paon_clean == "")
+  )
+```
+
+```{r}
+onspd <- read_csv(
+  "ONSPD_FEB_2026_UK.csv",
+  col_select = c("pcds", "lat", "long"),
+  show_col_types = FALSE
+)
+```
+
+```{r}
+head(onspd)
+```
+
+```{r}
+merged <- read_csv("london_epc_ppd_merged.csv", show_col_types = FALSE)
+```
+```{r}
+onspd <- onspd %>%
+  mutate(pcds = trimws(toupper(pcds)))
+```
+
+```{r}
+merged <- merged %>%
+  left_join(onspd, by = c("postcode" = "pcds"))
+```
+
+```{r}
+merged %>%
+  summarise(
+    total         = n(),
+    has_coords    = sum(!is.na(lat)),
+    missing_coords = sum(is.na(lat))
+  )
+```
+
+
+```{r}
+library(jsonlite)
+```
+
+```{r}
+url <- "https://api.tfl.gov.uk/StopPoint/Mode/tube,dlr,overground,elizabeth-line"
+
+tfl_data <- fromJSON(url)
+stations <- tfl_data$stopPoints
+```
+
+```{r}
+tfl_stations <- stations %>%
+  select(
+    station_name = commonName,
+    lat,
+    lon
+  ) %>%
+  distinct()
+```
+
+```{r}
+dim(tfl_stations)
+head(tfl_stations)
+```
+
+```{r}
+install.packages("geosphere")
+library(geosphere)
+```
+
+```{r}
+get_min_dist <- function(prop_lat, prop_lon) {
+  if (is.na(prop_lat) | is.na(prop_lon)) return(NA_real_)
+  dists <- distHaversine(
+    c(prop_lon, prop_lat),
+    cbind(tfl_stations$lon, tfl_stations$lat)
+  )
+  min(dists) / 1000
+}
+
+merged$dist_to_tube_km <- mapply(
+  get_min_dist, merged$lat, merged$long  # long not lon
+)
+
+summary(merged$dist_to_tube_km)
+```
+
+```{r}
+# Find the outlier properties
+merged %>%
+  filter(dist_to_tube_km > 50) %>%
+  select(postcode, lat, long, dist_to_tube_km)
+```
+
+```{r}
+merged %>%
+  summarise(
+    over_20km = sum(dist_to_tube_km > 20, na.rm = TRUE),
+    over_10km = sum(dist_to_tube_km > 10, na.rm = TRUE),
+    over_5km  = sum(dist_to_tube_km > 5, na.rm = TRUE)
+  )
+```
+
+```{r}
+# 1. Check all properties over 20km
+merged %>%
+  filter(dist_to_tube_km > 20) %>%
+  select(postcode, lat, long, dist_to_tube_km, district) %>%
+  arrange(desc(dist_to_tube_km))
+```
+
+```{r}
+# 2. Drop them — no legitimate London property is more than 20km from a TfL station
+merged <- merged %>%
+  filter(is.na(dist_to_tube_km) | dist_to_tube_km <= 20)
+
+# Verify
+nrow(merged)
+summary(merged$dist_to_tube_km)
+```
+```{r}
+merged <- merged %>%
+  select(
+    # ── Transaction identifiers ────────────────────
+    transaction_id, price, date_of_transfer,
+    postcode, paon, saon, street,
+    town_city, district,
+    
+    # ── PPD variables ──────────────────────────────
+    property_type     = property_type.x,
+    old_new, duration,
+    
+    # ── EPC join keys (clean) ──────────────────────
+    lmk_key, lodgement_date,
+    paon_clean        = paon_clean.x,
+    saon_clean        = saon_clean.x,
+    
+    # ── EPC rating ─────────────────────────────────
+    current_energy_rating, current_energy_efficiency,
+    potential_energy_rating, potential_energy_efficiency,
+    
+    # ── Energy costs ───────────────────────────────
+    heating_cost_current, heating_cost_potential,
+    hot_water_cost_current, lighting_cost_current,
+    
+    # ── Physical characteristics ───────────────────
+    property_type_epc, built_form, construction_age_band,
+    total_floor_area, number_habitable_rooms,
+    floor_level, flat_storey_count,
+    walls_description, roof_description,
+    windows_description, mainheat_description,
+    main_fuel, mains_gas_flag,
+    
+    # ── Location ───────────────────────────────────
+    lat, long, dist_to_tube_km
+  )
+
+# Check
+ncol(merged)
+names(merged)
+```
+```{r}
+write.csv(merged, "london_final.csv", row.names = FALSE)
+
+cat("Saved: london_final.csv\n")
+cat("Rows:", nrow(merged), "\n")
+cat("Columns:", ncol(merged), "\n")
+```
+

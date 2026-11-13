@@ -1,0 +1,411 @@
+---
+title: "EPC_Data_Prep"
+output: pdf_document
+date: "2026-03-04"
+---
+
+```{r}
+library(readr)
+library(dplyr)
+library(stringr)
+```
+
+```{r}
+cert_files <- list.files(
+  "epc",
+  pattern = "certificates.*\\.csv$",
+  full.names = TRUE,
+  recursive = TRUE
+)
+```
+
+```{r}
+epc_cert <- bind_rows(lapply(cert_files, read_csv))
+```
+```{r}
+dim(epc_cert)
+```
+
+```{r}
+write.csv(epc_cert,"epc_cert.csv")
+```
+
+```{r}
+names(epc_cert)
+```
+```{r}
+# Keep only essential EPC fields for merging and modelling
+epc_small <- epc_cert %>%
+  transmute(
+    lmk_key = LMK_KEY,
+    postcode = POSTCODE,
+    lodgement_date = as.Date(LODGEMENT_DATE),
+    paon_epc = ADDRESS1,
+    street_epc = ADDRESS2,
+    current_energy_rating = CURRENT_ENERGY_RATING,
+    current_energy_efficiency = CURRENT_ENERGY_EFFICIENCY,
+    total_floor_area = TOTAL_FLOOR_AREA,
+    built_form = BUILT_FORM,
+    construction_age_band = CONSTRUCTION_AGE_BAND
+  ) %>%
+  filter(!is.na(postcode), postcode != "", !is.na(lodgement_date))
+```
+
+```{r}
+names(epc_small)
+```
+
+```{r}
+write.csv(epc_small,"epc_small.csv")
+```
+
+```{r}
+head(epc_small<-read.csv('epc_small.csv'))
+```
+```{r}
+epc_small <- epc_small %>%
+  mutate(
+    postcode = trimws(toupper(postcode)),
+    paon_epc  = trimws(toupper(paon_epc))
+  )
+```
+
+```{r}
+names(epc_small)
+```
+```{r}
+epc_cert %>% 
+  select(ADDRESS1, ADDRESS2, ADDRESS3) %>% 
+  sample_n(20) %>% 
+  print(n = 20)
+```
+```{r}
+epc_cert %>%
+  select(ADDRESS2) %>%
+  filter(!is.na(ADDRESS2)) %>%
+  sample_n(20) %>%
+  print(n = 20)
+```
+```{r}
+epc_cert %>%
+  summarise(
+    address2_null = sum(is.na(ADDRESS2)),
+    address2_present = sum(!is.na(ADDRESS2)),
+    total = n()
+  )
+```
+```{r}
+epc_cert %>%
+  summarise(
+    uprn_present = sum(!is.na(UPRN) & UPRN != ""),
+    uprn_null    = sum(is.na(UPRN) | UPRN == ""),
+    total        = n()
+  )
+```
+```{r}
+# EPC houses (no ADDRESS2)
+epc_cert %>%
+  filter(is.na(ADDRESS2)) %>%
+  select(ADDRESS1, ADDRESS2, ADDRESS3) %>%
+  sample_n(20)
+```
+
+```{r}
+epc_cert %>%
+  mutate(is_flat = !is.na(ADDRESS2)) %>%
+  count(is_flat)
+```
+
+```{r}
+epc_cert %>%
+  filter(!is.na(ADDRESS2)) %>%
+  select(ADDRESS1, ADDRESS2) %>%
+  sample_n(20)
+```
+```{r}
+epc_cert <- epc_cert %>%
+  mutate(
+    saon_clean    = str_extract(ADDRESS1, "\\d+"),  # flat number from ADDRESS1
+    paon_clean    = str_extract(ADDRESS2, "^\\d+"), # building number from ADDRESS2
+    postcode      = trimws(toupper(POSTCODE))
+  )
+```
+
+```{r}
+epc_cert %>%
+  filter(!is.na(ADDRESS2)) %>%
+  mutate(saon_clean = str_extract(ADDRESS1, "\\d+")) %>%
+  select(ADDRESS1, saon_clean) %>%
+  sample_n(20)
+```
+
+```{r}
+# EPC: same logic on ADDRESS1
+epc_cert %>%
+  filter(!is.na(ADDRESS2)) %>%
+  mutate(
+    saon_clean = str_extract(
+      toupper(ADDRESS1),
+      "(?<=FLAT |APARTMENT |UNIT )([\\dA-Z]+)"
+    )
+  ) %>%
+  select(ADDRESS1, saon_clean) %>%
+  sample_n(20)
+```
+
+
+```{r}
+names(epc_cert)
+```
+```{r}
+epc_clean <- epc_cert %>%
+  mutate(
+    postcode   = trimws(toupper(POSTCODE)),
+    saon_clean = str_extract(toupper(ADDRESS1), "(?<=FLAT |APARTMENT |UNIT )([\\dA-Z]+)"),
+    paon_clean = trimws(toupper(str_extract(ADDRESS2, "^\\d+")))
+  ) %>%
+  select(
+    # ── Join keys ──────────────────────────────────
+    lmk_key               = LMK_KEY,
+    postcode,
+    saon_clean,
+    paon_clean,
+    lodgement_date        = LODGEMENT_DATE,
+
+    # ── EPC rating ─────────────────────────────────
+    current_energy_rating    = CURRENT_ENERGY_RATING,
+    current_energy_efficiency = CURRENT_ENERGY_EFFICIENCY,
+    potential_energy_rating  = POTENTIAL_ENERGY_RATING,
+    potential_energy_efficiency = POTENTIAL_ENERGY_EFFICIENCY,
+
+    # ── Energy costs ───────────────────────────────
+    heating_cost_current  = HEATING_COST_CURRENT,
+    heating_cost_potential = HEATING_COST_POTENTIAL,
+    hot_water_cost_current = HOT_WATER_COST_CURRENT,
+    lighting_cost_current = LIGHTING_COST_CURRENT,
+
+    # ── Physical characteristics ───────────────────
+    property_type         = PROPERTY_TYPE,
+    built_form            = BUILT_FORM,
+    construction_age_band = CONSTRUCTION_AGE_BAND,
+    total_floor_area      = TOTAL_FLOOR_AREA,
+    number_habitable_rooms = NUMBER_HABITABLE_ROOMS,
+    floor_level           = FLOOR_LEVEL,
+    flat_storey_count     = FLAT_STOREY_COUNT,
+    walls_description     = WALLS_DESCRIPTION,
+    roof_description      = ROOF_DESCRIPTION,
+    windows_description   = WINDOWS_DESCRIPTION,
+    mainheat_description  = MAINHEAT_DESCRIPTION,
+    main_fuel             = MAIN_FUEL,
+    mains_gas_flag        = MAINS_GAS_FLAG
+  )
+```
+
+```{r}
+write.csv(epc_clean,"epc_clean.csv")
+```
+
+```{r}
+# 2. How many EPC records have a valid paon_clean?
+epc_clean %>%
+  summarise(
+    has_paon_clean = sum(!is.na(paon_clean) & paon_clean != ""),
+    no_paon_clean  = sum(is.na(paon_clean) | paon_clean == "")
+  )
+```
+
+```{r}
+# 3. Spot check — do the join keys actually align?
+ppd_flats %>% select(postcode, saon_clean, paon_clean) %>% sample_n(10)
+epc_flats %>% select(postcode, saon_clean, paon_clean) %>% sample_n(10)
+```
+```{r}
+# FLATS: postcode + saon_clean only (paon_clean too unreliable)
+flats_joined <- ppd_flats %>%
+  left_join(epc_flats, by = c("postcode", "saon_clean"))
+
+# HOUSES: postcode + paon_clean (houses are more reliable)
+houses_joined <- ppd_houses %>%
+  left_join(epc_houses, by = c("postcode", "paon_clean"))
+
+# COMBINE
+merged <- bind_rows(flats_joined, houses_joined)
+
+# CHECK MATCH RATE
+merged %>%
+  summarise(
+    total      = n(),
+    matched    = sum(!is.na(lmk_key)),
+    unmatched  = sum(is.na(lmk_key)),
+    match_rate = round(matched / total * 100, 1)
+  )
+```
+
+```{r}
+# 1. Check for duplicates - are transactions being multiplied?
+merged %>%
+  count(transaction_id) %>%
+  filter(n > 1) %>%
+  summarise(
+    duplicated_transactions = n(),
+    total_duplicate_rows = sum(n)
+  )
+```
+
+```{r}
+# 2. Check row counts at each stage
+nrow(ppd_clean)
+nrow(ppd_flats)
+nrow(ppd_houses)
+nrow(flats_joined)
+nrow(houses_joined)
+nrow(merged)
+```
+
+```{r}
+# Keep only the most recent EPC per postcode + saon_clean
+epc_flats_deduped <- epc_flats %>%
+  arrange(postcode, saon_clean, desc(lodgement_date)) %>%
+  group_by(postcode, saon_clean) %>%
+  slice(1) %>%
+  ungroup()
+
+# Same for houses
+epc_houses_deduped <- epc_houses %>%
+  arrange(postcode, paon_clean, desc(lodgement_date)) %>%
+  group_by(postcode, paon_clean) %>%
+  slice(1) %>%
+  ungroup()
+
+# Re-run joins with deduped EPC
+flats_joined <- ppd_flats %>%
+  left_join(epc_flats_deduped, by = c("postcode", "saon_clean"))
+
+houses_joined <- ppd_houses %>%
+  left_join(epc_houses_deduped, by = c("postcode", "paon_clean"))
+
+# Combine
+merged <- bind_rows(flats_joined, houses_joined)
+
+# Check
+merged %>%
+  summarise(
+    total      = n(),
+    matched    = sum(!is.na(lmk_key)),
+    unmatched  = sum(is.na(lmk_key)),
+    match_rate = round(matched / total * 100, 1)
+  )
+```
+```{r}
+# 1. How many flats vs houses matched?
+flats_joined %>%
+  summarise(
+    total      = n(),
+    matched    = sum(!is.na(lmk_key)),
+    match_rate = round(matched / total * 100, 1)
+  )
+
+
+```
+```{r}
+houses_joined %>%
+  summarise(
+    total      = n(),
+    matched    = sum(!is.na(lmk_key)),
+    match_rate = round(matched / total * 100, 1)
+  )
+```
+```{r}
+# What does paon_clean look like for unmatched houses in PPD?
+houses_joined %>%
+  filter(is.na(lmk_key)) %>%
+  select(paon, paon_clean, postcode) %>%
+  sample_n(20)
+```
+
+```{r}
+# What does paon_clean look like in EPC houses?
+epc_houses_deduped %>%
+  select(postcode, paon_clean) %>%
+  sample_n(20)
+```
+
+```{r}
+epc_houses_deduped <- epc_cert %>%
+  mutate(
+    postcode   = trimws(toupper(POSTCODE)),
+    saon_clean = str_extract(toupper(ADDRESS1), "(?<=FLAT |APARTMENT |UNIT )([\\dA-Z]+)"),
+    paon_clean = trimws(str_extract(toupper(ADDRESS1), "^\\d+"))  # from ADDRESS1 for houses
+  ) %>%
+  filter(is.na(saon_clean), !is.na(paon_clean)) %>%
+  select(
+    lmk_key                     = LMK_KEY,
+    postcode, saon_clean, paon_clean,
+    lodgement_date              = LODGEMENT_DATE,
+    current_energy_rating       = CURRENT_ENERGY_RATING,
+    current_energy_efficiency   = CURRENT_ENERGY_EFFICIENCY,
+    potential_energy_rating     = POTENTIAL_ENERGY_RATING,
+    potential_energy_efficiency = POTENTIAL_ENERGY_EFFICIENCY,
+    heating_cost_current        = HEATING_COST_CURRENT,
+    heating_cost_potential      = HEATING_COST_POTENTIAL,
+    hot_water_cost_current      = HOT_WATER_COST_CURRENT,
+    lighting_cost_current       = LIGHTING_COST_CURRENT,
+    property_type_epc           = PROPERTY_TYPE,
+    built_form                  = BUILT_FORM,
+    construction_age_band       = CONSTRUCTION_AGE_BAND,
+    total_floor_area            = TOTAL_FLOOR_AREA,
+    number_habitable_rooms      = NUMBER_HABITABLE_ROOMS,
+    floor_level                 = FLOOR_LEVEL,
+    flat_storey_count           = FLAT_STOREY_COUNT,
+    walls_description           = WALLS_DESCRIPTION,
+    roof_description            = ROOF_DESCRIPTION,
+    windows_description         = WINDOWS_DESCRIPTION,
+    mainheat_description        = MAINHEAT_DESCRIPTION,
+    main_fuel                   = MAIN_FUEL,
+    mains_gas_flag              = MAINS_GAS_FLAG
+  ) %>%
+  arrange(postcode, paon_clean, desc(lodgement_date)) %>%
+  group_by(postcode, paon_clean) %>%
+  slice(1) %>%
+  ungroup()
+
+# Re-run house join
+houses_joined <- ppd_houses %>%
+  left_join(epc_houses_deduped, by = c("postcode", "paon_clean"))
+
+# Check house match rate
+houses_joined %>%
+  summarise(
+    total      = n(),
+    matched    = sum(!is.na(lmk_key)),
+    match_rate = round(matched / total * 100, 1)
+  )
+```
+
+```{r}
+# Combine flats and houses
+merged <- bind_rows(flats_joined, houses_joined)
+
+# Final match rate
+merged %>%
+  summarise(
+    total      = n(),
+    matched    = sum(!is.na(lmk_key)),
+    unmatched  = sum(is.na(lmk_key)),
+    match_rate = round(matched / total * 100, 1)
+  )
+```
+```{r}
+merged %>%
+  count(transaction_id) %>%
+  filter(n > 1) %>%
+  nrow()
+```
+
+```{r}
+write.csv(merged, "london_epc_ppd_merged.csv", row.names = FALSE)
+```
+
+
+
+

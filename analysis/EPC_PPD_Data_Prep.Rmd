@@ -1,0 +1,286 @@
+---
+title: "EPC & Price Paid Data — Cleaning & Merge"
+output: html_document
+date: "2026-03-04"
+---
+
+# 0. Libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(readr)
+library(dplyr)
+library(stringr)
+library(lubridate)
+```
+
+---
+
+# 1. Load Price Paid Data (PPD)
+
+```{r load-ppd}
+files <- list.files(
+  path = "data_gov",
+  pattern = "*.csv",
+  full.names = TRUE
+)
+
+ppd_cols <- c(
+  "transaction_id", "price", "date_of_transfer",
+  "postcode", "property_type", "old_new", "duration",
+  "paon", "saon", "street", "locality",
+  "town_city", "district", "county",
+  "ppd_category_type", "record_status"
+)
+
+read_ppd_year <- function(path) {
+  read_csv(
+    file = path,
+    col_names = ppd_cols,
+    col_types = cols(
+      transaction_id    = col_character(),
+      price             = col_double(),
+      date_of_transfer  = col_datetime(format = ""),
+      postcode          = col_character(),
+      property_type     = col_character(),
+      old_new           = col_character(),
+      duration          = col_character(),
+      paon              = col_character(),
+      saon              = col_character(),
+      street            = col_character(),
+      locality          = col_character(),
+      town_city         = col_character(),
+      district          = col_character(),
+      county            = col_character(),
+      ppd_category_type = col_character(),
+      record_status     = col_character()
+    ),
+    progress = FALSE,
+    show_col_types = FALSE
+  )
+}
+
+ppd_all <- bind_rows(lapply(files, read_ppd_year))
+```
+
+---
+
+# 2. Filter & Clean PPD
+
+```{r clean-ppd}
+ppd_clean <- ppd_all %>%
+  # Keep standard residential active transactions only
+  filter(ppd_category_type == "A", record_status == "A") %>%
+  # Remove invalid prices and missing dates
+  filter(!is.na(price), price > 0, !is.na(date_of_transfer)) %>%
+  # Restrict to Greater London
+  filter(county == "GREATER LONDON") %>%
+  # Normalise join key fields
+  mutate(
+    postcode   = trimws(toupper(postcode)),
+    paon_clean = trimws(toupper(str_extract(paon, "^[^,]+"))),
+    saon_clean = str_extract(
+      toupper(saon),
+      "(?<=FLAT |APARTMENT |UNIT )([\\dA-Z]+)"
+    )
+  ) %>%
+  # Drop redundant columns (all same value after filtering)
+  select(
+    transaction_id, price, date_of_transfer,
+    postcode, paon, saon, paon_clean, saon_clean,
+    street, town_city, district,
+    property_type, old_new, duration
+  )
+
+# Sanity check
+cat("PPD rows:", nrow(ppd_clean), "\n")
+cat("Duplicate transactions:", ppd_clean %>% count(transaction_id) %>% filter(n > 1) %>% nrow(), "\n")
+```
+
+---
+
+# 3. Load EPC Data
+
+```{r load-epc, message=FALSE, warning=FALSE}
+cert_files <- list.files(
+  "epc",
+  pattern = "certificates.*\\.csv$",
+  full.names = TRUE,
+  recursive = TRUE
+)
+
+epc_cert <- bind_rows(lapply(cert_files, read_csv, show_col_types = FALSE))
+
+cat("EPC rows loaded:", nrow(epc_cert), "\n")
+```
+
+---
+
+# 4. Clean EPC — Flats
+
+Flats have ADDRESS2 populated. ADDRESS1 = flat descriptor (SAON), ADDRESS2 = building number + street.
+
+```{r clean-epc-flats}
+epc_flats_deduped <- epc_cert %>%
+  mutate(
+    postcode   = trimws(toupper(POSTCODE)),
+    saon_clean = str_extract(
+      toupper(ADDRESS1),
+      "(?<=FLAT |APARTMENT |UNIT )([\\dA-Z]+)"
+    ),
+    paon_clean = trimws(toupper(str_extract(ADDRESS2, "^\\d+")))
+  ) %>%
+  # Flats: ADDRESS2 is present and saon_clean extracted
+  filter(!is.na(ADDRESS2), !is.na(saon_clean)) %>%
+  select(
+    lmk_key                     = LMK_KEY,
+    postcode, saon_clean, paon_clean,
+    lodgement_date              = LODGEMENT_DATE,
+    current_energy_rating       = CURRENT_ENERGY_RATING,
+    current_energy_efficiency   = CURRENT_ENERGY_EFFICIENCY,
+    potential_energy_rating     = POTENTIAL_ENERGY_RATING,
+    potential_energy_efficiency = POTENTIAL_ENERGY_EFFICIENCY,
+    heating_cost_current        = HEATING_COST_CURRENT,
+    heating_cost_potential      = HEATING_COST_POTENTIAL,
+    hot_water_cost_current      = HOT_WATER_COST_CURRENT,
+    lighting_cost_current       = LIGHTING_COST_CURRENT,
+    property_type_epc           = PROPERTY_TYPE,
+    built_form                  = BUILT_FORM,
+    construction_age_band       = CONSTRUCTION_AGE_BAND,
+    total_floor_area            = TOTAL_FLOOR_AREA,
+    number_habitable_rooms      = NUMBER_HABITABLE_ROOMS,
+    floor_level                 = FLOOR_LEVEL,
+    flat_storey_count           = FLAT_STOREY_COUNT,
+    walls_description           = WALLS_DESCRIPTION,
+    roof_description            = ROOF_DESCRIPTION,
+    windows_description         = WINDOWS_DESCRIPTION,
+    mainheat_description        = MAINHEAT_DESCRIPTION,
+    main_fuel                   = MAIN_FUEL,
+    mains_gas_flag              = MAINS_GAS_FLAG
+  ) %>%
+  # Keep most recent EPC per property
+  arrange(postcode, saon_clean, desc(lodgement_date)) %>%
+  group_by(postcode, saon_clean) %>%
+  slice(1) %>%
+  ungroup()
+
+cat("EPC flats (deduped):", nrow(epc_flats_deduped), "\n")
+```
+
+---
+
+# 5. Clean EPC — Houses
+
+Houses have no ADDRESS2. Full address is in ADDRESS1 (e.g. "13, Durell Road"). Extract leading number as PAON.
+
+```{r clean-epc-houses}
+epc_houses_deduped <- epc_cert %>%
+  mutate(
+    postcode   = trimws(toupper(POSTCODE)),
+    saon_clean = str_extract(
+      toupper(ADDRESS1),
+      "(?<=FLAT |APARTMENT |UNIT )([\\dA-Z]+)"
+    ),
+    paon_clean = trimws(str_extract(toupper(ADDRESS1), "^\\d+"))
+  ) %>%
+  # Houses: no flat descriptor, but has a leading number in ADDRESS1
+  filter(is.na(saon_clean), !is.na(paon_clean)) %>%
+  select(
+    lmk_key                     = LMK_KEY,
+    postcode, saon_clean, paon_clean,
+    lodgement_date              = LODGEMENT_DATE,
+    current_energy_rating       = CURRENT_ENERGY_RATING,
+    current_energy_efficiency   = CURRENT_ENERGY_EFFICIENCY,
+    potential_energy_rating     = POTENTIAL_ENERGY_RATING,
+    potential_energy_efficiency = POTENTIAL_ENERGY_EFFICIENCY,
+    heating_cost_current        = HEATING_COST_CURRENT,
+    heating_cost_potential      = HEATING_COST_POTENTIAL,
+    hot_water_cost_current      = HOT_WATER_COST_CURRENT,
+    lighting_cost_current       = LIGHTING_COST_CURRENT,
+    property_type_epc           = PROPERTY_TYPE,
+    built_form                  = BUILT_FORM,
+    construction_age_band       = CONSTRUCTION_AGE_BAND,
+    total_floor_area            = TOTAL_FLOOR_AREA,
+    number_habitable_rooms      = NUMBER_HABITABLE_ROOMS,
+    floor_level                 = FLOOR_LEVEL,
+    flat_storey_count           = FLAT_STOREY_COUNT,
+    walls_description           = WALLS_DESCRIPTION,
+    roof_description            = ROOF_DESCRIPTION,
+    windows_description         = WINDOWS_DESCRIPTION,
+    mainheat_description        = MAINHEAT_DESCRIPTION,
+    main_fuel                   = MAIN_FUEL,
+    mains_gas_flag              = MAINS_GAS_FLAG
+  ) %>%
+  # Keep most recent EPC per property
+  arrange(postcode, paon_clean, desc(lodgement_date)) %>%
+  group_by(postcode, paon_clean) %>%
+  slice(1) %>%
+  ungroup()
+
+cat("EPC houses (deduped):", nrow(epc_houses_deduped), "\n")
+```
+
+---
+
+# 6. Split PPD into Flats and Houses
+
+```{r split-ppd}
+ppd_flats  <- ppd_clean %>% filter(!is.na(saon))
+ppd_houses <- ppd_clean %>% filter(is.na(saon))
+
+cat("PPD flats:", nrow(ppd_flats), "\n")
+cat("PPD houses:", nrow(ppd_houses), "\n")
+```
+
+---
+
+# 7. Join
+
+Flats join on `postcode + saon_clean` (paon_clean too unreliable for flats).  
+Houses join on `postcode + paon_clean`.
+
+```{r join}
+flats_joined <- ppd_flats %>%
+  left_join(epc_flats_deduped, by = c("postcode", "saon_clean"))
+
+houses_joined <- ppd_houses %>%
+  left_join(epc_houses_deduped, by = c("postcode", "paon_clean"))
+
+merged <- bind_rows(flats_joined, houses_joined)
+```
+
+---
+
+# 8. Match Rate & Validation
+
+```{r validate}
+# Overall match rate
+merged %>%
+  summarise(
+    total      = n(),
+    matched    = sum(!is.na(lmk_key)),
+    unmatched  = sum(is.na(lmk_key)),
+    match_rate = round(matched / total * 100, 1)
+  )
+
+# Match rate by flats vs houses
+flats_joined %>%
+  summarise(type = "flats", total = n(), matched = sum(!is.na(lmk_key)),
+            match_rate = round(matched / total * 100, 1))
+
+houses_joined %>%
+  summarise(type = "houses", total = n(), matched = sum(!is.na(lmk_key)),
+            match_rate = round(matched / total * 100, 1))
+
+# Duplicate check — should be 0
+cat("Duplicate transactions:", merged %>% count(transaction_id) %>% filter(n > 1) %>% nrow(), "\n")
+```
+
+---
+
+# 9. Save Final Dataset
+
+```{r save}
+write.csv(merged, "london_epc_ppd_merged.csv", row.names = FALSE)
+cat("Saved: london_epc_ppd_merged.csv\n")
+cat("Final dimensions:", nrow(merged), "rows x", ncol(merged), "columns\n")
+```

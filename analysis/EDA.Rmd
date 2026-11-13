@@ -1,0 +1,549 @@
+---
+title: "EDA"
+output: html_document
+date: "2026-03-10"
+---
+
+```{r}
+library(tidyverse)
+library(sf)
+library(dplyr)
+library(lubridate)
+```
+
+```{r}
+data<-read.csv('final_london_modelling.csv')
+```
+
+```{r}
+price_dist <- ggplot(data, aes(x = price)) +
+  geom_histogram(bins = 100, fill = "#2C7BB6", colour = "white", alpha = 0.85) +
+  scale_x_continuous(labels = scales::comma, 
+                     limits = c(0, quantile(data$price, 0.99))) +
+  labs(title = "Distribution of Sale Prices — London 2018-2025",
+       subtitle = "Capped at 99th percentile for visualisation",
+       x = "Sale Price (£)", y = "Count")
+
+print(price_dist)
+```
+
+```{r}
+dir.create("eda_plots", showWarnings = FALSE)
+```
+
+```{r}
+ggsave("eda_plots/01a_price_distribution.png", price_dist, width=10, height=6, dpi=300)
+```
+
+```{r}
+log_price_dist <- ggplot(data, aes(x = log(price))) +
+  geom_histogram(bins = 100, fill = "#D7191C", colour = "white", alpha = 0.85) +
+  labs(title = "Distribution of Log Sale Prices — London 2018-2025",
+       x = "Log Sale Price", y = "Count")
+print(log_price_dist)
+```
+```{r}
+# ── 1a. Raw price distribution ────────────────────────────────────────────────
+p1a <- ggplot(data, aes(x = price)) +
+  geom_histogram(bins = 100, fill = "#2C7BB6", colour = "white", alpha = 0.85) +
+  scale_x_continuous(labels = scales::comma,
+                     limits = c(0, quantile(data$price, 0.99))) +
+  labs(title = "Distribution of Sale Prices — London 2018-2025",
+       subtitle = "Capped at 99th percentile for visualisation",
+       x = "Sale Price (£)", y = "Count")
+
+# ── 1b. Log price distribution ────────────────────────────────────────────────
+p1b <- ggplot(data, aes(x = log(price))) +
+  geom_histogram(bins = 100, fill = "#D7191C", colour = "white", alpha = 0.85) +
+  labs(title = "Distribution of Log Sale Prices — London 2018-2025",
+       x = "Log Sale Price", y = "Count")
+
+# ── 1c. EPC efficiency distribution ──────────────────────────────────────────
+p1c <- ggplot(data, aes(x = current_energy_efficiency)) +
+  geom_histogram(bins = 50, fill = "#1A9641", colour = "white", alpha = 0.85) +
+  labs(title = "Distribution of Current Energy Efficiency",
+       x = "Energy Efficiency Score", y = "Count")
+
+# ── 1d. Floor area distribution ───────────────────────────────────────────────
+p1d <- ggplot(data, aes(x = total_floor_area)) +
+  geom_histogram(bins = 80, fill = "#756BB1", colour = "white", alpha = 0.85) +
+  scale_x_continuous(labels = scales::comma) +
+  labs(title = "Distribution of Total Floor Area",
+       x = "Floor Area (m²)", y = "Count")
+
+# ── 1e. Distance to tube distribution ────────────────────────────────────────
+p1e <- ggplot(data, aes(x = dist_to_tube_km)) +
+  geom_histogram(bins = 80, fill = "#F46D43", colour = "white", alpha = 0.85) +
+  labs(title = "Distribution of Distance to Nearest TfL Station",
+       x = "Distance (km)", y = "Count")
+
+# ── 1f. Transaction volume by year ────────────────────────────────────────────
+p1f <- data %>%
+  mutate(year = lubridate::year(date_of_transfer)) %>%
+  count(year) %>%
+  ggplot(aes(x = factor(year), y = n)) +
+  geom_col(fill = "#2C7BB6", alpha = 0.85) +
+  geom_text(aes(label = scales::comma(n)), vjust = -0.5, size = 3) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "Transaction Volume by Year — London 2018-2025",
+       x = "Year", y = "Number of Transactions")
+
+# ── Print all ─────────────────────────────────────────────────────────────────
+print(p1a)
+print(p1b)
+print(p1c)
+print(p1d)
+print(p1e)
+print(p1f)
+
+# ── Save all ──────────────────────────────────────────────────────────────────
+ggsave("eda_plots/01a_price_distribution.png",          p1a, width=10, height=6, dpi=300)
+ggsave("eda_plots/01b_log_price_distribution.png",      p1b, width=10, height=6, dpi=300)
+ggsave("eda_plots/01c_epc_efficiency_distribution.png", p1c, width=10, height=6, dpi=300)
+ggsave("eda_plots/01d_floor_area_distribution.png",     p1d, width=10, height=6, dpi=300)
+ggsave("eda_plots/01e_dist_tube_distribution.png",      p1e, width=10, height=6, dpi=300)
+ggsave("eda_plots/01f_transaction_volume_year.png",     p1f, width=10, height=6, dpi=300)
+
+cat("Section 1 complete ✓\n")
+```
+```{r}
+# ── 2a. Price vs EPC Efficiency (scatterplot with smoother) ───────────────────
+p2a <- ggplot(data %>% sample_n(50000), 
+              aes(x = current_energy_efficiency, y = log(price))) +
+  geom_point(alpha = 0.1, colour = "#2C7BB6", size = 0.8) +
+  geom_smooth(method = "loess", colour = "#D7191C", se = TRUE) +
+  labs(title = "Log Price vs Current Energy Efficiency",
+       subtitle = "Sample of 50,000 transactions",
+       x = "Energy Efficiency Score", y = "Log Sale Price (£)")
+
+# ── 2b. Price vs Property Type (boxplot) ─────────────────────────────────────
+p2b <- ggplot(data, aes(x = reorder(property_type, price, median), 
+                                 y = log(price), fill = property_type)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.85) +
+  scale_fill_brewer(palette = "Set2") +
+  coord_flip() +
+  labs(title = "Log Price by Property Type",
+       x = "", y = "Log Sale Price (£)") +
+  theme(legend.position = "none")
+
+# ── 2c. Price vs Construction Age Band (boxplot) ──────────────────────────────
+age_order <- c("Before 1919", "1919-1929", "1930-1949", "1950-1966",
+               "1967-1975", "1976-1982", "1983-1990", "1991-1995",
+               "1996-2002", "2003-2006", "2007-2011", "2012 onwards")
+
+p2c <- ggplot(data %>% 
+                mutate(construction_age_band = factor(construction_age_band, 
+                                                       levels = age_order)),
+              aes(x = construction_age_band, y = log(price), 
+                  fill = construction_age_band)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.85) +
+  scale_fill_viridis_d() +
+  coord_flip() +
+  labs(title = "Log Price by Construction Age Band",
+       x = "", y = "Log Sale Price (£)") +
+  theme(legend.position = "none")
+
+# ── 2d. Price vs Floor Level (boxplot) ────────────────────────────────────────
+floor_order <- c("Basement", "Ground", "Floor 1-3", 
+                 "Floor 4-6", "Floor 7-9", "Floor 10+", "Unknown")
+
+p2d <- ggplot(data %>%
+                mutate(floor_level = factor(floor_level, levels = floor_order)),
+              aes(x = floor_level, y = log(price), fill = floor_level)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.85) +
+  scale_fill_brewer(palette = "RdYlBu") +
+  coord_flip() +
+  labs(title = "Log Price by Floor Level",
+       x = "", y = "Log Sale Price (£)") +
+  theme(legend.position = "none")
+
+# ── 2e. Price vs Distance to Tube (scatterplot with smoother) ─────────────────
+p2e <- ggplot(data %>% sample_n(50000),
+              aes(x = dist_to_tube_km, y = log(price))) +
+  geom_point(alpha = 0.1, colour = "#F46D43", size = 0.8) +
+  geom_smooth(method = "loess", colour = "#1A9641", se = TRUE) +
+  labs(title = "Log Price vs Distance to Nearest TfL Station",
+       subtitle = "Sample of 50,000 transactions",
+       x = "Distance to TfL Station (km)", y = "Log Sale Price (£)")
+
+# ── 2f. Price vs Built Form (boxplot) ─────────────────────────────────────────
+p2f <- ggplot(data, aes(x = reorder(built_form, price, median),
+                                 y = log(price), fill = built_form)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.85) +
+  scale_fill_brewer(palette = "Set3") +
+  coord_flip() +
+  labs(title = "Log Price by Built Form",
+       x = "", y = "Log Sale Price (£)") +
+  theme(legend.position = "none")
+
+# ── 2g. Price vs District (ranked bar chart) ──────────────────────────────────
+p2g <- data %>%
+  group_by(district) %>%
+  summarise(median_price = median(price), .groups = "drop") %>%
+  ggplot(aes(x = reorder(district, median_price), y = median_price)) +
+  geom_col(fill = "#756BB1", alpha = 0.85) +
+  geom_text(aes(label = scales::comma(median_price)), 
+            hjust = -0.1, size = 2.5) +
+  scale_y_continuous(labels = scales::comma,
+                     limits = c(0, max(data %>% 
+                                         group_by(district) %>% 
+                                         summarise(m = median(price)) %>% 
+                                         pull(m)) * 1.15)) +
+  coord_flip() +
+  labs(title = "Median Sale Price by London District",
+       x = "", y = "Median Sale Price (£)")
+
+# ── Print all ─────────────────────────────────────────────────────────────────
+print(p2a)
+print(p2b)
+print(p2c)
+print(p2d)
+print(p2e)
+print(p2f)
+print(p2g)
+
+# ── Save all ──────────────────────────────────────────────────────────────────
+ggsave("eda_plots/02a_price_vs_epc.png",           p2a, width=10, height=6, dpi=300)
+ggsave("eda_plots/02b_price_vs_property_type.png", p2b, width=10, height=6, dpi=300)
+ggsave("eda_plots/02c_price_vs_age_band.png",      p2c, width=10, height=7, dpi=300)
+ggsave("eda_plots/02d_price_vs_floor_level.png",   p2d, width=10, height=6, dpi=300)
+ggsave("eda_plots/02e_price_vs_tube_dist.png",     p2e, width=10, height=6, dpi=300)
+ggsave("eda_plots/02f_price_vs_built_form.png",    p2f, width=10, height=6, dpi=300)
+ggsave("eda_plots/02g_price_vs_district.png",      p2g, width=12, height=9, dpi=300)
+
+cat("Section 2 complete ✓\n")
+```
+
+```{r}
+str(data)
+```
+
+```{r}
+# ── Select numeric variables only ─────────────────────────────────────────────
+numeric_vars <- data %>%
+  select(price, current_energy_efficiency, potential_energy_efficiency,
+         heating_cost_current, heating_cost_potential,
+         hot_water_cost_current, lighting_cost_current,
+         total_floor_area, number_habitable_rooms,
+         dist_to_tube_km, lat, long)
+
+# ── Compute correlation matrix ────────────────────────────────────────────────
+cor_matrix <- cor(numeric_vars, use = "complete.obs")
+
+# ── Melt for ggplot using tidyr instead of reshape2 ──────────────────────────
+cor_melted <- cor_matrix %>%
+  as.data.frame() %>%
+  rownames_to_column("Var1") %>%
+  tidyr::pivot_longer(-Var1, names_to = "Var2", values_to = "value")
+
+# ── Plot heatmap ──────────────────────────────────────────────────────────────
+p3a <- ggplot(cor_melted, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(colour = "white") +
+  geom_text(aes(label = round(value, 2)), size = 3) +
+  scale_fill_gradient2(low = "#D7191C", mid = "white", high = "#2C7BB6",
+                       midpoint = 0, limits = c(-1, 1),
+                       name = "Correlation") +
+  labs(title = "Correlation Heatmap — Numeric Variables",
+       x = "", y = "") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        axis.text.y = element_text(size = 9))
+
+print(p3a)
+ggsave("eda_plots/03a_correlation_heatmap.png", p3a, width=12, height=10, dpi=300)
+
+cat("Section 3 complete ✓\n")
+```
+
+```{r}
+# ── Load and filter to London only ───────────────────────────────────────────
+boroughs <- st_read("boroughs.geojson") 
+
+# Check what columns we have
+names(boroughs)
+cat("Total rows:", nrow(boroughs), "\n")
+```
+```{r}
+# ── Filter to London boroughs using known London names ────────────────────────
+london_names <- c("City of London", "Barking and Dagenham", "Barnet", "Bexley",
+                  "Brent", "Bromley", "Camden", "Croydon", "Ealing", "Enfield",
+                  "Greenwich", "Hackney", "Hammersmith and Fulham", "Haringey",
+                  "Harrow", "Havering", "Hillingdon", "Hounslow", "Islington",
+                  "Kensington and Chelsea", "Kingston upon Thames", "Lambeth",
+                  "Lewisham", "Merton", "Newham", "Redbridge", "Richmond upon Thames",
+                  "Southwark", "Sutton", "Tower Hamlets", "Waltham Forest",
+                  "Wandsworth", "Westminster")
+
+london_boroughs <- boroughs %>%
+  filter(lad09nm %in% london_names)
+
+cat("London boroughs:", nrow(london_boroughs), "\n")
+print(london_boroughs$lad09nm)
+```
+```{r}
+# ── Prepare district stats with manual name fix ───────────────────────────────
+district_stats <- data %>%
+  group_by(district) %>%
+  summarise(
+    median_price = median(price),
+    median_epc   = median(current_energy_efficiency),
+    n            = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    district = str_to_title(district),
+    district = case_when(
+      district == "Kingston Upon Thames"    ~ "Kingston upon Thames",
+      district == "Richmond Upon Thames"    ~ "Richmond upon Thames",
+      district == "Hammersmith And Fulham"  ~ "Hammersmith and Fulham",
+      district == "Kensington And Chelsea"  ~ "Kensington and Chelsea",
+      district == "City Of London"          ~ "City of London",
+      district == "Barking And Dagenham"    ~ "Barking and Dagenham",
+      district == "City Of Westminster"     ~ "Westminster",
+      TRUE ~ district
+    )
+  )
+
+# ── Join to shapefile ─────────────────────────────────────────────────────────
+london_map <- london_boroughs %>%
+  left_join(district_stats, by = c("lad09nm" = "district"))
+
+# Check join
+cat("Matched boroughs:", sum(!is.na(london_map$median_price)), "\n")
+cat("Unmatched boroughs:", sum(is.na(london_map$median_price)), "\n")
+```
+
+```{r}
+# ── 4a. Choropleth — Median Sale Price by Borough ─────────────────────────────
+p4a <- ggplot(london_map) +
+  geom_sf(aes(fill = median_price), colour = "white", linewidth = 0.3) +
+  scale_fill_gradient2(low = "#2C7BB6", mid = "#FFFFBF", high = "#D7191C",
+                       midpoint = median(district_stats$median_price),
+                       labels = scales::comma,
+                       name = "Median Price (£)") +
+  labs(title = "Median Sale Price by London Borough",
+       subtitle = "London residential transactions 2018-2025",
+       x = "", y = "") +
+  theme_void() +
+  theme(legend.position = "right",
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 10))
+
+# ── 4b. Choropleth — Median EPC Efficiency by Borough ────────────────────────
+p4b <- ggplot(london_map) +
+  geom_sf(aes(fill = median_epc), colour = "white", linewidth = 0.3) +
+  scale_fill_gradient2(low = "#D7191C", mid = "#FFFFBF", high = "#1A9641",
+                       midpoint = median(district_stats$median_epc),
+                       name = "Median EPC Score") +
+  labs(title = "Median EPC Efficiency Score by London Borough",
+       subtitle = "London residential transactions 2018-2025",
+       x = "", y = "") +
+  theme_void() +
+  theme(legend.position = "right",
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 10))
+
+print(p4a)
+print(p4b)
+
+ggsave("eda_plots/04a_choropleth_price.png", p4a, width=12, height=8, dpi=300)
+ggsave("eda_plots/04b_choropleth_epc.png",   p4b, width=12, height=8, dpi=300)
+
+cat("Section 4 complete ✓\n")
+```
+
+```{r}
+# ── 4a. Choropleth — Median Sale Price by Borough ─────────────────────────────
+p4a <- ggplot(london_map) +
+  geom_sf(aes(fill = median_price), colour = "white", linewidth = 0.3) +
+  scale_fill_gradient2(low = "#2C7BB6", mid = "#FFFFBF", high = "#D7191C",
+                       midpoint = median(district_stats$median_price),
+                       labels = scales::comma,
+                       name = "Median Price (£)") +
+  labs(title = "Median Sale Price by London Borough",
+       subtitle = "London residential transactions 2018-2025",
+       x = "", y = "") +
+  theme_void() +
+  theme(
+    legend.position = "right",
+    legend.key.width = unit(1.5, "cm"),
+    legend.key.height = unit(3, "cm"),
+    legend.text = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10),
+    plot.background = element_rect(fill = "white", colour = NA),
+    panel.background = element_rect(fill = "white", colour = NA)
+  )
+
+# ── 4b. Choropleth — Median EPC Efficiency by Borough ────────────────────────
+p4b <- ggplot(london_map) +
+  geom_sf(aes(fill = median_epc), colour = "white", linewidth = 0.3) +
+  scale_fill_gradient2(low = "#D7191C", mid = "#FFFFBF", high = "#1A9641",
+                       midpoint = median(district_stats$median_epc),
+                       name = "Median EPC Score") +
+  labs(title = "Median EPC Efficiency Score by London Borough",
+       subtitle = "London residential transactions 2018-2025",
+       x = "", y = "") +
+  theme_void() +
+  theme(
+    legend.position = "right",
+    legend.key.width = unit(1.5, "cm"),
+    legend.key.height = unit(3, "cm"),
+    legend.text = element_text(size = 9),
+    legend.title = element_text(size = 10),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10),
+    plot.background = element_rect(fill = "white", colour = NA),
+    panel.background = element_rect(fill = "white", colour = NA)
+  )
+
+print(p4a)
+print(p4b)
+
+ggsave("eda_plots/04a_choropleth_price.png", p4a, width=12, height=8, dpi=300)
+ggsave("eda_plots/04b_choropleth_epc.png",   p4b, width=12, height=8, dpi=300)
+
+cat("Section 4 complete ✓\n")
+```
+```{r}
+# Check variables we'll cluster on
+data %>%
+  select(current_energy_efficiency, potential_energy_efficiency,
+         heating_cost_current, hot_water_cost_current,
+         total_floor_area, number_habitable_rooms) %>%
+  summary()
+```
+```{r}
+# ── Step 1: Prepare and scale clustering variables ────────────────────────────
+library(cluster)
+
+set.seed(42)
+sample_idx <- sample(nrow(cluster_vars), 50000)
+cluster_sample <- cluster_vars[sample_idx, ]
+
+# ── Step 2: Elbow method ──────────────────────────────────────────────────────
+wss <- sapply(1:10, function(k) {
+  kmeans(cluster_sample, centers = k, nstart = 25, iter.max = 300)$tot.withinss
+})
+
+elbow_df <- data.frame(k = 1:10, wss = wss)
+
+p5a <- ggplot(elbow_df, aes(x = k, y = wss)) +
+  geom_line(colour = "#2C7BB6", linewidth = 1.2) +
+  geom_point(colour = "#D7191C", size = 3) +
+  scale_x_continuous(breaks = 1:10) +
+  labs(title = "Elbow Method — Optimal Number of Clusters",
+       x = "Number of Clusters (k)", y = "Total Within-Cluster Sum of Squares")
+
+# ── Step 3: Silhouette method — fix by using a small subsample ────────────────
+set.seed(42)
+sil_sample <- cluster_sample[sample(nrow(cluster_sample), 2000), ]
+
+sil_scores <- sapply(2:8, function(k) {
+  km    <- kmeans(sil_sample, centers = k, nstart = 25, iter.max = 300)
+  diss  <- daisy(sil_sample)
+  ss    <- silhouette(km$cluster, diss)
+  mean(ss[, 3])
+})
+
+sil_df <- data.frame(k = 2:8, silhouette = sil_scores)
+
+p5b <- ggplot(sil_df, aes(x = k, y = silhouette)) +
+  geom_line(colour = "#1A9641", linewidth = 1.2) +
+  geom_point(colour = "#D7191C", size = 3) +
+  scale_x_continuous(breaks = 2:8) +
+  labs(title = "Silhouette Method — Optimal Number of Clusters",
+       x = "Number of Clusters (k)", y = "Average Silhouette Score")
+
+print(p5a)
+print(p5b)
+
+ggsave("eda_plots/05a_elbow.png",      p5a, width=10, height=6, dpi=300)
+ggsave("eda_plots/05b_silhouette.png", p5b, width=10, height=6, dpi=300)
+
+cat("WSS values:\n")
+print(elbow_df)
+cat("\nSilhouette scores:\n")
+print(sil_df)
+```
+```{r}
+# ── Step 4: Run K-means with k=4 on full dataset ──────────────────────────────
+set.seed(42)
+km4 <- kmeans(cluster_vars, centers = 4, nstart = 25, iter.max = 300)
+
+# Assign cluster labels back to full dataset
+data$cluster <- as.factor(km4$cluster)
+
+cat("Cluster sizes:\n")
+print(table(data$cluster))
+
+# ── Step 5: Profile each cluster ─────────────────────────────────────────────
+cluster_profile <- data %>%
+  group_by(cluster) %>%
+  summarise(
+    n                          = n(),
+    median_price               = median(price),
+    mean_epc                   = round(mean(current_energy_efficiency), 1),
+    mean_potential_epc         = round(mean(potential_energy_efficiency), 1),
+    mean_heating_cost          = round(mean(heating_cost_current), 0),
+    mean_hot_water_cost        = round(mean(hot_water_cost_current), 0),
+    mean_floor_area            = round(mean(total_floor_area), 1),
+    mean_rooms                 = round(mean(number_habitable_rooms), 1),
+    pct_flat                   = round(mean(property_type == "Flat") * 100, 1),
+    pct_terraced               = round(mean(property_type == "Terraced") * 100, 1),
+    pct_detached               = round(mean(property_type == "Detached") * 100, 1),
+    pct_new                    = round(mean(old_new == "New") * 100, 1),
+    .groups = "drop"
+  )
+
+print(cluster_profile)
+
+# ── Step 6: Price by cluster boxplot ─────────────────────────────────────────
+p5c <- ggplot(data, aes(x = cluster, y = log(price), fill = cluster)) +
+  geom_boxplot(outlier.alpha = 0.1, outlier.size = 0.5) +
+  scale_fill_manual(values = c("#2C7BB6", "#1A9641", "#D7191C", "#FF8C00")) +
+  scale_y_continuous(
+    breaks = log(c(100000, 250000, 500000, 1000000, 2000000)),
+    labels = c("£100k", "£250k", "£500k", "£1m", "£2m")
+  ) +
+  labs(title = "Sale Price Distribution by Cluster",
+       subtitle = "K-means clustering on physical and energy characteristics (k=4)",
+       x = "Cluster", y = "Sale Price (log scale)") +
+  theme(legend.position = "none")
+
+# ── Step 7: PCA visualisation ─────────────────────────────────────────────────
+set.seed(42)
+pca_sample_idx <- sample(nrow(cluster_vars), 20000)
+pca_result <- prcomp(cluster_vars[pca_sample_idx, ], scale. = FALSE)
+
+pca_df <- data.frame(
+  PC1     = pca_result$x[, 1],
+  PC2     = pca_result$x[, 2],
+  cluster = data$cluster[pca_sample_idx]
+)
+
+# Variance explained
+var_explained <- round(summary(pca_result)$importance[2, 1:2] * 100, 1)
+
+p5d <- ggplot(pca_df, aes(x = PC1, y = PC2, colour = cluster)) +
+  geom_point(alpha = 0.3, size = 0.8) +
+  scale_colour_manual(values = c("#2C7BB6", "#1A9641", "#D7191C", "#FF8C00")) +
+  labs(title = "PCA Projection of K-means Clusters (k=4)",
+       subtitle = "Sample of 20,000 properties",
+       x = paste0("PC1 (", var_explained[1], "% variance)"),
+       y = paste0("PC2 (", var_explained[2], "% variance)"),
+       colour = "Cluster")
+
+print(p5c)
+print(p5d)
+
+ggsave("eda_plots/05c_cluster_price.png", p5c, width=10, height=7, dpi=300)
+ggsave("eda_plots/05d_cluster_pca.png",   p5d, width=10, height=7, dpi=300)
+
+cat("\nSection 5 complete ✓\n")
+```
+```{r}
+print(cluster_profile, width = Inf)
+```
+
+

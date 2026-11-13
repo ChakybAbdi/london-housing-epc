@@ -1,0 +1,909 @@
+---
+title: "Data_Cleaning"
+output: html_document
+date: "2026-03-07"
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+```{r}
+merged<-read.csv('london_final.csv')
+```
+
+```{r}
+# 1. Price outliers — anything suspiciously low or high?
+merged %>%
+  summarise(
+    under_10k   = sum(price < 10000, na.rm = TRUE),
+    under_50k   = sum(price < 50000, na.rm = TRUE),
+    over_5m     = sum(price > 5000000, na.rm = TRUE),
+    over_10m    = sum(price > 10000000, na.rm = TRUE)
+  )
+```
+
+```{r}
+# 2. Check numeric variables for nonsensical values
+merged %>%
+  summarise(
+    neg_floor_area     = sum(total_floor_area <= 0, na.rm = TRUE),
+    zero_rooms         = sum(number_habitable_rooms == 0, na.rm = TRUE),
+    neg_heating_cost   = sum(heating_cost_current < 0, na.rm = TRUE),
+    neg_efficiency     = sum(current_energy_efficiency <= 0, na.rm = TRUE)
+  )
+```
+
+```{r}
+# 3. Check categorical variables
+merged %>% count(property_type) %>% arrange(desc(n))
+merged %>% count(current_energy_rating) %>% arrange(current_energy_rating)
+merged %>% count(old_new) %>% arrange(desc(n))
+merged %>% count(duration) %>% arrange(desc(n))
+```
+
+```{r}
+# 4. Overall missing value summary
+merged %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  tidyr::pivot_longer(everything(), names_to = "variable", values_to = "missing") %>%
+  filter(missing > 0) %>%
+  arrange(desc(missing))
+```
+
+```{r}
+merged_clean <- merged %>%
+  
+  # ── 1. DROP PRICE OUTLIERS ────────────────────────────────────────────────
+  filter(price >= 10000) %>%
+  
+  # ── 2. DROP NEGATIVE/ZERO FLOOR AREA ─────────────────────────────────────
+  filter(is.na(total_floor_area) | total_floor_area > 0) %>%
+  
+  # ── 3. FIX NEGATIVE ENERGY COSTS → NA ────────────────────────────────────
+  mutate(
+    heating_cost_current   = ifelse(heating_cost_current < 0,   NA, heating_cost_current),
+    heating_cost_potential = ifelse(heating_cost_potential < 0, NA, heating_cost_potential),
+    hot_water_cost_current = ifelse(hot_water_cost_current < 0, NA, hot_water_cost_current),
+    lighting_cost_current  = ifelse(lighting_cost_current < 0,  NA, lighting_cost_current)
+  ) %>%
+  
+  # ── 4. DROP COLUMNS TOO SPARSE OR REDUNDANT FOR MODELLING ────────────────
+  select(
+    -flat_storey_count,   # 97% missing — unusable
+    -property_type_epc,   # redundant with property_type from PPD
+    -saon_clean,          # join key only
+    -paon_clean,          # join key only
+    -paon,                # raw address — not needed for modelling
+    -saon,                # raw address — not needed for modelling
+    -lmk_key,             # EPC identifier — not needed for modelling
+    -lodgement_date       # EPC date — not needed for modelling
+  ) %>%
+
+  # ── 5. FIX PROPERTY TYPE — PPD CODES TO LABELS ────────────────────────────
+  mutate(
+    property_type = case_when(
+      property_type == "D" ~ "Detached",
+      property_type == "S" ~ "Semi-Detached",
+      property_type == "T" ~ "Terraced",
+      property_type == "F" ~ "Flat",
+      property_type == "O" ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    old_new = case_when(
+      old_new == "Y" ~ "New",
+      old_new == "N" ~ "Established",
+      TRUE ~ NA_character_
+    ),
+    duration = case_when(
+      duration == "F" ~ "Freehold",
+      duration == "L" ~ "Leasehold",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+
+  # ── 6. CONVERT ENERGY RATING TO ORDERED FACTOR ───────────────────────────
+  mutate(
+    current_energy_rating = factor(
+      current_energy_rating,
+      levels = c("G", "F", "E", "D", "C", "B", "A"),
+      ordered = TRUE
+    )
+  )
+
+# ── 7. CHECK ──────────────────────────────────────────────────────────────
+cat("Rows:", nrow(merged_clean), "\n")
+cat("Columns:", ncol(merged_clean), "\n")
+
+# Final missing value check
+merged_clean %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  tidyr::pivot_longer(everything(), names_to = "variable", values_to = "missing") %>%
+  filter(missing > 0) %>%
+  arrange(desc(missing))
+```
+
+```{r}
+merged_clean <- merged_clean %>%
+  # Drop unmatched EPC rows
+  filter(!is.na(current_energy_rating)) %>%
+  # Drop remaining rows with missing coordinates
+  filter(!is.na(lat), !is.na(long), !is.na(dist_to_tube_km)) %>%
+  # Drop rows with missing postcode or street
+  filter(!is.na(postcode), !is.na(street))
+
+cat("Final dataset rows:", nrow(merged_clean), "\n")
+cat("Final dataset cols:", ncol(merged_clean), "\n")
+
+```
+```{r}
+names(merged_clean)
+```
+
+```{r}
+glimpse(merged_clean)
+```
+```{r}
+merged_clean %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  tidyr::pivot_longer(everything(), names_to = "variable", values_to = "missing") %>%
+  filter(missing > 0) %>%
+  arrange(desc(missing))
+```
+```{r}
+merged_clean %>%
+  summarise(
+    min_price    = min(price),
+    median_price = median(price),
+    mean_price   = round(mean(price)),
+    max_price    = max(price)
+  )
+```
+
+```{r}
+merged_clean %>% count(property_type) %>% mutate(pct = round(n/sum(n)*100, 1))
+merged_clean %>% count(current_energy_rating) %>% mutate(pct = round(n/sum(n)*100, 1))
+merged_clean %>% count(old_new) %>% mutate(pct = round(n/sum(n)*100, 1))
+merged_clean %>% count(duration) %>% mutate(pct = round(n/sum(n)*100, 1))
+```
+
+```{r}
+merged_clean %>%
+  select(price, total_floor_area, current_energy_efficiency,
+         dist_to_tube_km, number_habitable_rooms) %>%
+  summary()
+```
+
+```{r}
+cat("Duplicate transactions:", 
+    merged_clean %>% count(transaction_id) %>% filter(n > 1) %>% nrow(), "\n")
+```
+
+```{r}
+# Check what property_type looks like in the raw merged dataset
+merged %>% 
+  select(property_type) %>% 
+  count(property_type)
+```
+
+```{r}
+merged_clean %>%
+  filter(total_floor_area > 500) %>%
+  select(price, total_floor_area, property_type, number_habitable_rooms) %>%
+  arrange(desc(total_floor_area))
+```
+
+```{r}
+merged_clean %>%
+  filter(current_energy_efficiency > 100) %>%
+  count()
+```
+
+```{r}
+merged_clean %>%
+  filter(number_habitable_rooms > 20) %>%
+  count()
+```
+
+```{r}
+merged_clean %>%
+  filter(price < 50000) %>%
+  select(price, property_type, district, total_floor_area)
+```
+
+```{r}
+# Check what property_type looks like in original merged
+merged %>%
+  pull(property_type) %>%
+  unique()
+```
+
+```{r}
+ppd_clean<-read.csv('clean_ppd.csv')
+```
+
+```{r}
+# Check ppd_clean still has the original codes
+ppd_clean %>%
+  count(property_type)
+```
+
+```{r}
+# Recover property_type from ppd_clean
+merged_clean <- merged_clean %>%
+  select(-property_type) %>%
+  left_join(
+    ppd_clean %>% select(transaction_id, property_type),
+    by = "transaction_id"
+  ) %>%
+  # Recode to labels
+  mutate(
+    property_type = case_when(
+      property_type == "D" ~ "Detached",
+      property_type == "S" ~ "Semi-Detached",
+      property_type == "T" ~ "Terraced",
+      property_type == "F" ~ "Flat",
+      property_type == "O" ~ "Other",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Verify
+merged_clean %>%
+  count(property_type) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+```
+```{r}
+merged_clean <- merged_clean %>%
+  select(
+    transaction_id, price, date_of_transfer,
+    postcode, street, town_city, district,
+    property_type, old_new, duration,
+    current_energy_rating, current_energy_efficiency,
+    potential_energy_rating, potential_energy_efficiency,
+    heating_cost_current, heating_cost_potential,
+    hot_water_cost_current, lighting_cost_current,
+    built_form, construction_age_band,
+    total_floor_area, number_habitable_rooms,
+    floor_level, walls_description, roof_description,
+    windows_description, mainheat_description,
+    main_fuel, mains_gas_flag,
+    lat, long, dist_to_tube_km
+  )
+
+# Final row and column count
+cat("Final rows:", nrow(merged_clean), "\n")
+cat("Final cols:", ncol(merged_clean), "\n")
+```
+```{r}
+# ══════════════════════════════════════════════════════════════════════════════
+# FINAL DATASET CHECK
+# ══════════════════════════════════════════════════════════════════════════════
+
+cat("═══════════════════════════════════\n")
+cat("  DIMENSIONS\n")
+cat("═══════════════════════════════════\n")
+cat("Rows:", nrow(merged_clean), "\n")
+cat("Cols:", ncol(merged_clean), "\n")
+
+cat("\n═══════════════════════════════════\n")
+cat("  COLUMN NAMES & TYPES\n")
+cat("═══════════════════════════════════\n")
+glimpse(merged_clean)
+
+cat("\n═══════════════════════════════════\n")
+cat("  MISSING VALUES\n")
+cat("═══════════════════════════════════\n")
+merged_clean %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  tidyr::pivot_longer(everything(), names_to = "variable", values_to = "missing") %>%
+  filter(missing > 0) %>%
+  arrange(desc(missing)) %>%
+  print(n = Inf)
+
+cat("\n═══════════════════════════════════\n")
+cat("  PRICE\n")
+cat("═══════════════════════════════════\n")
+merged_clean %>%
+  summarise(
+    min    = min(price),
+    p25    = quantile(price, 0.25),
+    median = median(price),
+    mean   = round(mean(price)),
+    p75    = quantile(price, 0.75),
+    max    = max(price)
+  ) %>% print()
+
+cat("\n═══════════════════════════════════\n")
+cat("  KEY NUMERIC RANGES\n")
+cat("═══════════════════════════════════\n")
+merged_clean %>%
+  select(total_floor_area, current_energy_efficiency,
+         dist_to_tube_km, number_habitable_rooms) %>%
+  summary() %>% print()
+
+cat("\n═══════════════════════════════════\n")
+cat("  CATEGORICALS\n")
+cat("═══════════════════════════════════\n")
+cat("-- property_type --\n")
+merged_clean %>% count(property_type) %>% mutate(pct = round(n/sum(n)*100,1)) %>% print()
+
+cat("-- current_energy_rating --\n")
+merged_clean %>% count(current_energy_rating) %>% mutate(pct = round(n/sum(n)*100,1)) %>% print()
+
+cat("-- old_new --\n")
+merged_clean %>% count(old_new) %>% mutate(pct = round(n/sum(n)*100,1)) %>% print()
+
+cat("-- duration --\n")
+merged_clean %>% count(duration) %>% mutate(pct = round(n/sum(n)*100,1)) %>% print()
+
+cat("-- built_form --\n")
+merged_clean %>% count(built_form) %>% mutate(pct = round(n/sum(n)*100,1)) %>% print()
+
+cat("\n═══════════════════════════════════\n")
+cat("  DUPLICATE TRANSACTIONS\n")
+cat("═══════════════════════════════════\n")
+cat("Duplicates:", merged_clean %>% count(transaction_id) %>% filter(n > 1) %>% nrow(), "\n")
+
+cat("\n═══════════════════════════════════\n")
+cat("  DATE RANGE\n")
+cat("═══════════════════════════════════\n")
+merged_clean %>%
+  mutate(year = lubridate::year(date_of_transfer)) %>%
+  count(year) %>%
+  arrange(year) %>%
+  print()
+```
+
+```{r}
+merged_clean <- merged_clean %>%
+  # Fix floor area cap
+  mutate(total_floor_area = ifelse(total_floor_area > 500, NA, total_floor_area)) %>%
+  # Fix impossible EPC efficiency
+  mutate(
+    current_energy_efficiency   = ifelse(current_energy_efficiency > 100, NA, current_energy_efficiency),
+    potential_energy_efficiency = ifelse(potential_energy_efficiency > 100, NA, potential_energy_efficiency)
+  ) %>%
+  # Fix impossible room counts
+  mutate(number_habitable_rooms = ifelse(number_habitable_rooms > 20, NA, number_habitable_rooms)) %>%
+  # Fix built_form junk values
+  mutate(built_form = ifelse(built_form %in% c("NO DATA!", "Not Recorded"), NA, built_form))
+
+# Quick verify
+merged_clean %>%
+  summarise(
+    max_floor_area  = max(total_floor_area, na.rm = TRUE),
+    max_efficiency  = max(current_energy_efficiency, na.rm = TRUE),
+    max_rooms       = max(number_habitable_rooms, na.rm = TRUE),
+    bad_built_form  = sum(built_form %in% c("NO DATA!", "Not Recorded"), na.rm = TRUE)
+  )
+```
+
+```{r}
+merged_clean %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  tidyr::pivot_longer(everything(), names_to = "variable", values_to = "missing") %>%
+  filter(missing > 0) %>%
+  mutate(pct = round(missing / nrow(merged_clean) * 100, 1)) %>%
+  arrange(desc(missing))
+```
+
+```{r}
+merged_clean %>%
+  mutate(has_floor_level = !is.na(floor_level),
+         has_rooms       = !is.na(number_habitable_rooms),
+         has_gas_flag    = !is.na(mains_gas_flag)) %>%
+  group_by(property_type) %>%
+  summarise(
+    pct_floor_level_missing = round(mean(!has_floor_level) * 100, 1),
+    pct_rooms_missing       = round(mean(!has_rooms) * 100, 1),
+    pct_gas_flag_missing    = round(mean(!has_gas_flag) * 100, 1),
+    n                       = n()
+  )
+```
+
+```{r}
+# Is floor_level missing more for houses than flats?
+merged_clean %>%
+  mutate(is_flat = property_type == "Flat") %>%
+  group_by(is_flat) %>%
+  summarise(
+    floor_level_missing_pct = round(mean(is.na(floor_level)) * 100, 1),
+    rooms_missing_pct       = round(mean(is.na(number_habitable_rooms)) * 100, 1),
+    n                       = n()
+  )
+```
+
+```{r}
+merged_clean <- merged_clean %>%
+
+  # ── 1. floor_level: houses → "Ground", flats → mode ──────────────────────
+  mutate(
+    floor_level = case_when(
+      property_type != "Flat" ~ "Ground",
+      is.na(floor_level) & property_type == "Flat" ~ "Unknown",
+      TRUE ~ floor_level
+    )
+  ) %>%
+
+  # ── 2. total_floor_area: median by property type ──────────────────────────
+  group_by(property_type) %>%
+  mutate(
+    total_floor_area = ifelse(
+      is.na(total_floor_area),
+      median(total_floor_area, na.rm = TRUE),
+      total_floor_area
+    )
+  ) %>%
+  ungroup() %>%
+
+  # ── 3. construction_age_band: mode by property type ───────────────────────
+  group_by(property_type) %>%
+  mutate(
+    construction_age_band = ifelse(
+      is.na(construction_age_band),
+      names(sort(table(construction_age_band), decreasing = TRUE))[1],
+      construction_age_band
+    )
+  ) %>%
+  ungroup() %>%
+
+  # ── 4. built_form: mode by property type ─────────────────────────────────
+  group_by(property_type) %>%
+  mutate(
+    built_form = ifelse(
+      is.na(built_form),
+      names(sort(table(built_form), decreasing = TRUE))[1],
+      built_form
+    )
+  ) %>%
+  ungroup() %>%
+
+  # ── 5. main_fuel: mode overall ────────────────────────────────────────────
+  mutate(
+    main_fuel = ifelse(
+      is.na(main_fuel),
+      names(sort(table(main_fuel), decreasing = TRUE))[1],
+      main_fuel
+    )
+  ) %>%
+
+  # ── 6. mains_gas_flag: derive from main_fuel ─────────────────────────────
+  mutate(
+    mains_gas_flag = case_when(
+      !is.na(mains_gas_flag) ~ mains_gas_flag,
+      main_fuel == "mains gas (not community)" ~ "Y",
+      TRUE ~ "N"
+    )
+  ) %>%
+
+  # ── 7. energy costs: median by property type ──────────────────────────────
+  group_by(property_type) %>%
+  mutate(
+    heating_cost_current   = ifelse(is.na(heating_cost_current),   median(heating_cost_current,   na.rm = TRUE), heating_cost_current),
+    heating_cost_potential = ifelse(is.na(heating_cost_potential), median(heating_cost_potential, na.rm = TRUE), heating_cost_potential),
+    hot_water_cost_current = ifelse(is.na(hot_water_cost_current), median(hot_water_cost_current, na.rm = TRUE), hot_water_cost_current),
+    lighting_cost_current  = ifelse(is.na(lighting_cost_current),  median(lighting_cost_current,  na.rm = TRUE), lighting_cost_current)
+  ) %>%
+  ungroup() %>%
+
+  # ── 8. EPC descriptions: "Unknown" for small missingness ──────────────────
+  mutate(
+    walls_description   = ifelse(is.na(walls_description),   "Unknown", walls_description),
+    roof_description    = ifelse(is.na(roof_description),    "Unknown", roof_description),
+    windows_description = ifelse(is.na(windows_description), "Unknown", windows_description),
+    mainheat_description = ifelse(is.na(mainheat_description), "Unknown", mainheat_description)
+  ) %>%
+
+  # ── 9. current/potential energy efficiency: median by rating ──────────────
+  group_by(current_energy_rating) %>%
+  mutate(
+    current_energy_efficiency   = ifelse(is.na(current_energy_efficiency),   median(current_energy_efficiency,   na.rm = TRUE), current_energy_efficiency),
+    potential_energy_efficiency = ifelse(is.na(potential_energy_efficiency), median(potential_energy_efficiency, na.rm = TRUE), potential_energy_efficiency)
+  ) %>%
+  ungroup()
+
+# ── 10. number_habitable_rooms and remaining: leave as NA ─────────────────
+# Will use complete-case or model-based handling at modelling stage
+
+# Check
+merged_clean %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  tidyr::pivot_longer(everything(), names_to = "variable", values_to = "missing") %>%
+  filter(missing > 0) %>%
+  mutate(pct = round(missing / nrow(merged_clean) * 100, 1)) %>%
+  arrange(desc(missing))
+```
+
+```{r}
+# Distribution of number_habitable_rooms by property type
+merged_clean %>%
+  group_by(property_type) %>%
+  summarise(
+    median_rooms = median(number_habitable_rooms, na.rm = TRUE),
+    mean_rooms   = round(mean(number_habitable_rooms, na.rm = TRUE), 1),
+    missing_pct  = round(mean(is.na(number_habitable_rooms)) * 100, 1)
+  )
+```
+
+```{r}
+# Is there correlation between rooms and floor area?
+cor(merged_clean$number_habitable_rooms, 
+    merged_clean$total_floor_area, 
+    use = "complete.obs")
+```
+
+```{r}
+# Build a simple linear model to predict rooms from floor area + property type
+rooms_model <- lm(
+  number_habitable_rooms ~ total_floor_area + property_type,
+  data = merged_clean %>% filter(!is.na(number_habitable_rooms))
+)
+
+summary(rooms_model)
+
+# Impute missing rooms using the model
+merged_clean <- merged_clean %>%
+  mutate(
+    number_habitable_rooms = ifelse(
+      is.na(number_habitable_rooms),
+      round(predict(rooms_model, newdata = .)),
+      number_habitable_rooms
+    ),
+    # Cap at sensible range just in case model predicts extreme values
+    number_habitable_rooms = pmax(1, pmin(number_habitable_rooms, 20))
+  )
+
+# Verify no missing remain
+cat("Missing rooms after imputation:", sum(is.na(merged_clean$number_habitable_rooms)), "\n")
+
+# Check distribution looks sensible
+merged_clean %>%
+  group_by(property_type) %>%
+  summarise(
+    min    = min(number_habitable_rooms),
+    median = median(number_habitable_rooms),
+    mean   = round(mean(number_habitable_rooms), 1),
+    max    = max(number_habitable_rooms)
+  )
+```
+
+```{r}
+write.csv(merged_clean, "london_modelling.csv", row.names = FALSE)
+cat("Saved: london_modelling.csv\n")
+cat("Final rows:", nrow(merged_clean), "\n")
+cat("Final cols:", ncol(merged_clean), "\n")
+cat("Missing values:", sum(is.na(merged_clean)), "\n")
+```
+##To-DO check all categorical variables (description and all to encode )
+
+```{r}
+data<-read.csv('london_modelling.csv')
+```
+
+
+```{r}
+table(data$construction_age_band)
+```
+```{r}
+data <- data %>%
+  mutate(
+    construction_age_band = case_when(
+      # ── Junk/invalid → NA ─────────────────────────────────────────────────
+      construction_age_band %in% c("INVALID!", "NO DATA!") ~ NA_character_,
+      
+      # ── Future years (impossible) → NA ────────────────────────────────────
+      construction_age_band %in% c("2026", "2035", "2042") ~ NA_character_,
+      
+      # ── Raw years → band them ─────────────────────────────────────────────
+      construction_age_band %in% c("1850", "1890", "1900", "1904", "1911") ~ "Before 1919",
+      construction_age_band %in% c("1920", "1925") ~ "1919-1929",
+      construction_age_band %in% c("1930", "1950") ~ "1930-1949",
+      construction_age_band %in% c("1960") ~ "1950-1966",
+      construction_age_band %in% c("1985") ~ "1983-1990",
+      construction_age_band %in% c("2000") ~ "1996-2002",
+      construction_age_band %in% c("2010", "2012", "2013", "2014", 
+                                    "2015", "2016", "2017") ~ "2007-2011",
+      construction_age_band %in% c("2018", "2019", "2020", 
+                                    "2021", "2022", "2023",
+                                    "2024", "2025") ~ "2012 onwards",
+      
+      # ── Standardise existing bands to consistent labels ───────────────────
+      str_detect(construction_age_band, "before 1900") ~ "Before 1919",
+      str_detect(construction_age_band, "1900-1929")   ~ "1919-1929",
+      str_detect(construction_age_band, "1930-1949")   ~ "1930-1949",
+      str_detect(construction_age_band, "1950-1966")   ~ "1950-1966",
+      str_detect(construction_age_band, "1967-1975")   ~ "1967-1975",
+      str_detect(construction_age_band, "1976-1982")   ~ "1976-1982",
+      str_detect(construction_age_band, "1983-1990")   ~ "1983-1990",
+      str_detect(construction_age_band, "1991-1995")   ~ "1991-1995",
+      str_detect(construction_age_band, "1996-2002")   ~ "1996-2002",
+      str_detect(construction_age_band, "2003-2006")   ~ "2003-2006",
+      str_detect(construction_age_band, "2007-2011|2007 onwards") ~ "2007-2011",
+      str_detect(construction_age_band, "2012-2021|2012 onwards") ~ "2012 onwards",
+      str_detect(construction_age_band, "2022 onwards") ~ "2012 onwards",
+      
+      TRUE ~ construction_age_band
+    )
+  ) %>%
+  # Impute remaining NAs with mode by property type
+  group_by(property_type) %>%
+  mutate(
+    construction_age_band = ifelse(
+      is.na(construction_age_band),
+      names(sort(table(construction_age_band), decreasing = TRUE))[1],
+      construction_age_band
+    )
+  ) %>%
+  ungroup()
+
+# Verify
+data %>%
+  count(construction_age_band) %>%
+  mutate(pct = round(n/sum(n)*100,1)) %>%
+  arrange(construction_age_band)
+```
+
+```{r}
+table(data$floor_level)
+```
+
+```{r}
+data <- data %>%
+  mutate(
+    floor_level_clean = case_when(
+      # ── Basement/Below ground ─────────────────────────────────────────────
+      floor_level %in% c("-1", "Basement") ~ "Basement",
+      
+      # ── Ground floor ──────────────────────────────────────────────────────
+      floor_level %in% c("0", "00", "Ground", "ground floor") ~ "Ground",
+      
+      # ── Mid floors (1-3) ──────────────────────────────────────────────────
+      floor_level %in% c("01", "1", "1st", "mid floor") ~ "Floor 1-3",
+      floor_level %in% c("02", "2", "2nd") ~ "Floor 1-3",
+      floor_level %in% c("03", "3", "3rd") ~ "Floor 1-3",
+      
+      # ── Mid-high floors (4-6) ─────────────────────────────────────────────
+      floor_level %in% c("04", "4th", "05", "5th", "06", "6th") ~ "Floor 4-6",
+      
+      # ── High floors (7-9) ─────────────────────────────────────────────────
+      floor_level %in% c("07", "7th", "08", "8th", "09", "9th") ~ "Floor 7-9",
+      
+      # ── Very high floors (10+) ────────────────────────────────────────────
+      floor_level %in% c("10", "10th", "11", "11th", "12", "12th",
+                          "13", "13th", "14", "14th", "15", "15th",
+                          "16", "16th", "17", "17th", "18", "18th",
+                          "19", "19th", "20", "20+", "20th",
+                          "21st or above", "top floor") ~ "Floor 10+",
+      
+      # ── Junk → Unknown ────────────────────────────────────────────────────
+      floor_level %in% c("NO DATA!", "NODATA!", "Unknown") ~ "Unknown",
+      
+      # ── Already imputed as Ground for houses ──────────────────────────────
+      floor_level == "Ground" ~ "Ground",
+      
+      TRUE ~ "Unknown"
+    )
+  ) %>%
+  select(-floor_level) %>%
+  rename(floor_level = floor_level_clean)
+
+# Verify
+data %>%
+  count(floor_level) %>%
+  mutate(pct = round(n/sum(n)*100,1)) %>%
+  arrange(floor_level)
+```
+```{r}
+table(data$walls_description)
+```
+```{r}
+colnames(data)
+```
+
+```{r}
+data <- data %>%
+  select(-current_energy_rating,
+         -potential_energy_rating,
+         -walls_description,
+         -roof_description,
+         -windows_description,
+         -mainheat_description,
+         -main_fuel,
+         -mains_gas_flag)
+
+# Final check
+cat("Cols:", ncol(data), "\n")
+names(data)
+cat("Missing values:", sum(is.na(data)), "\n")
+```
+```{r}
+data<- data %>%
+  select(-postcode, -street, -town_city)
+
+cat("Cols:", ncol(data), "\n")
+names(data)
+cat("Missing values:", sum(is.na(data)), "\n")
+```
+
+```{r}
+# ══════════════════════════════════════════════════════════════════════════════
+# FINAL PRE-SAVE DATASET CHECK
+# ══════════════════════════════════════════════════════════════════════════════
+
+cat("═══════════════════════════════════\n")
+cat("  DIMENSIONS\n")
+cat("═══════════════════════════════════\n")
+cat("Rows:", nrow(data), "\n")
+cat("Cols:", ncol(data), "\n")
+
+cat("\n═══════════════════════════════════\n")
+cat("  COLUMN NAMES & TYPES\n")
+cat("═══════════════════════════════════\n")
+glimpse(data)
+
+cat("\n═══════════════════════════════════\n")
+cat("  MISSING VALUES\n")
+cat("═══════════════════════════════════\n")
+missing <- data %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  tidyr::pivot_longer(everything(), names_to = "variable", values_to = "missing") %>%
+  filter(missing > 0)
+if(nrow(missing) == 0) cat("No missing values ✓\n") else print(missing)
+
+cat("\n═══════════════════════════════════\n")
+cat("  DUPLICATES\n")
+cat("═══════════════════════════════════\n")
+cat("Duplicate transaction IDs:", 
+    data %>% count(transaction_id) %>% filter(n > 1) %>% nrow(), "\n")
+
+cat("\n═══════════════════════════════════\n")
+cat("  PRICE\n")
+cat("═══════════════════════════════════\n")
+data %>%
+  summarise(
+    min    = min(price),
+    p25    = quantile(price, 0.25),
+    median = median(price),
+    mean   = round(mean(price)),
+    p75    = quantile(price, 0.75),
+    max    = max(price),
+    under_50k = sum(price < 50000),
+    over_10m  = sum(price > 10000000)
+  ) %>% print()
+
+cat("\n═══════════════════════════════════\n")
+cat("  KEY NUMERIC RANGES\n")
+cat("═══════════════════════════════════\n")
+data %>%
+  select(current_energy_efficiency, potential_energy_efficiency,
+         total_floor_area, number_habitable_rooms,
+         dist_to_tube_km, heating_cost_current,
+         hot_water_cost_current, lighting_cost_current) %>%
+  summary() %>% print()
+
+cat("\n═══════════════════════════════════\n")
+cat("  CATEGORICALS\n")
+cat("═══════════════════════════════════\n")
+cat("-- property_type --\n")
+data %>% count(property_type) %>% mutate(pct=round(n/sum(n)*100,1)) %>% print()
+
+cat("-- old_new --\n")
+data %>% count(old_new) %>% mutate(pct=round(n/sum(n)*100,1)) %>% print()
+
+cat("-- duration --\n")
+data %>% count(duration) %>% mutate(pct=round(n/sum(n)*100,1)) %>% print()
+
+cat("-- built_form --\n")
+data %>% count(built_form) %>% mutate(pct=round(n/sum(n)*100,1)) %>% print()
+
+cat("-- construction_age_band --\n")
+data %>% count(construction_age_band) %>% mutate(pct=round(n/sum(n)*100,1)) %>% arrange(construction_age_band) %>% print()
+
+cat("-- floor_level --\n")
+data %>% count(floor_level) %>% mutate(pct=round(n/sum(n)*100,1)) %>% print()
+
+cat("-- district (top 10) --\n")
+data %>% count(district) %>% mutate(pct=round(n/sum(n)*100,1)) %>% arrange(desc(n)) %>% head(10) %>% print()
+
+cat("\n═══════════════════════════════════\n")
+cat("  DATE RANGE\n")
+cat("═══════════════════════════════════\n")
+data %>%
+  mutate(year = lubridate::year(date_of_transfer)) %>%
+  count(year) %>%
+  arrange(year) %>%
+  print()
+
+cat("\n═══════════════════════════════════\n")
+cat("  SPATIAL\n")
+cat("═══════════════════════════════════\n")
+data %>%
+  summarise(
+    lat_min  = min(lat),
+    lat_max  = max(lat),
+    long_min = min(long),
+    long_max = max(long),
+    dist_min = min(dist_to_tube_km),
+    dist_max = max(dist_to_tube_km),
+    dist_mean = round(mean(dist_to_tube_km), 2)
+  ) %>% print()
+```
+
+```{r}
+data <- data %>%
+  # Fix price floor
+  filter(price >= 50000) %>%
+  # Fix zero and extreme energy costs
+  mutate(
+    heating_cost_current   = ifelse(heating_cost_current == 0,   NA, heating_cost_current),
+    hot_water_cost_current = ifelse(hot_water_cost_current == 0, NA, hot_water_cost_current),
+    lighting_cost_current  = ifelse(lighting_cost_current == 0,  NA, lighting_cost_current),
+    heating_cost_potential = ifelse(heating_cost_potential == 0, NA, heating_cost_potential)
+  ) %>%
+  # Cap extreme heating costs at 99th percentile
+  mutate(
+    p99_heat = quantile(heating_cost_current, 0.99, na.rm = TRUE),
+    heating_cost_current = ifelse(heating_cost_current > p99_heat, p99_heat, heating_cost_current)
+  ) %>%
+  select(-p99_heat) %>%
+  # Re-impute the new NAs with median by property type
+  group_by(property_type) %>%
+  mutate(
+    heating_cost_current   = ifelse(is.na(heating_cost_current),   median(heating_cost_current,   na.rm = TRUE), heating_cost_current),
+    hot_water_cost_current = ifelse(is.na(hot_water_cost_current), median(hot_water_cost_current, na.rm = TRUE), hot_water_cost_current),
+    lighting_cost_current  = ifelse(is.na(lighting_cost_current),  median(lighting_cost_current,  na.rm = TRUE), lighting_cost_current),
+    heating_cost_potential = ifelse(is.na(heating_cost_potential), median(heating_cost_potential, na.rm = TRUE), heating_cost_potential)
+  ) %>%
+  ungroup()
+
+# Quick verify
+cat("Rows:", nrow(data), "\n")
+cat("Missing values:", sum(is.na(data)), "\n")
+data %>%
+  summarise(
+    min_price       = min(price),
+    min_heat_cost   = min(heating_cost_current),
+    max_heat_cost   = max(heating_cost_current),
+    min_hotwater    = min(hot_water_cost_current),
+    min_lighting    = min(lighting_cost_current)
+  )
+```
+```{r}
+data <- data %>%
+  mutate(
+    heating_cost_current   = ifelse(heating_cost_current < 50,   NA, heating_cost_current),
+    heating_cost_potential = ifelse(heating_cost_potential < 50,  NA, heating_cost_potential),
+    hot_water_cost_current = ifelse(hot_water_cost_current < 20,  NA, hot_water_cost_current),
+    lighting_cost_current  = ifelse(lighting_cost_current < 10,   NA, lighting_cost_current)
+  ) %>%
+  group_by(property_type) %>%
+  mutate(
+    heating_cost_current   = ifelse(is.na(heating_cost_current),   median(heating_cost_current,   na.rm = TRUE), heating_cost_current),
+    heating_cost_potential = ifelse(is.na(heating_cost_potential), median(heating_cost_potential, na.rm = TRUE), heating_cost_potential),
+    hot_water_cost_current = ifelse(is.na(hot_water_cost_current), median(hot_water_cost_current, na.rm = TRUE), hot_water_cost_current),
+    lighting_cost_current  = ifelse(is.na(lighting_cost_current),  median(lighting_cost_current,  na.rm = TRUE), lighting_cost_current)
+  ) %>%
+  ungroup()
+
+# Verify
+cat("Missing values:", sum(is.na(data)), "\n")
+data %>%
+  summarise(
+    min_price      = min(price),
+    min_heat_cost  = min(heating_cost_current),
+    max_heat_cost  = max(heating_cost_current),
+    min_hotwater   = min(hot_water_cost_current),
+    min_lighting   = min(lighting_cost_current)
+  )
+```
+```{r}
+write.csv(data, "final_london_modelling.csv", row.names = FALSE)
+cat("Saved: london_modelling.csv ✓\n")
+cat("Final rows:", nrow(data), "\n")
+cat("Final cols:", ncol(data), "\n")
+cat("Missing values:", sum(is.na(data)), "\n")
+```
+
+
+

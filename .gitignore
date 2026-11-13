@@ -1,0 +1,12 @@
+# data is not redistributed: see README
+*.csv
+*.geojson
+*.txt
+data/
+epc/
+data_gov/
+.RData
+.RDataTmp*
+.Rhistory
+.Rproj.user/
+*.html
